@@ -1,0 +1,431 @@
+#if CONFIG_FREERTOS_UNICORE
+#define ARDUINO_RUNNING_CORE 0
+#else
+#define ARDUINO_RUNNING_CORE 1
+#endif
+
+//set up wifi and time
+#include <WiFi.h>
+#include <HTTPClient.h>
+#include <ArduinoJson.h>
+#include "time.h"
+
+const char* ssid  = "WHomeNetwork+";
+const char* password = "pbgt5nfexqgk";
+
+//Config JSON server name
+//String putJSON = "https://l0xwpfw0ul.execute-api.us-east-1.amazonaws.com/dev/put";
+String getJSON = "https://l0xwpfw0ul.execute-api.us-east-1.amazonaws.com/dev/get";
+
+//Config timezone
+const char* ntpServer = " us.pool.ntp.org";
+const long  gmtOffset_sec = -21600;
+const int   daylightOffset_sec = 3600;
+
+//Include font files
+#include "NotoSansBold15.h"
+#include "NotoSansBold36.h"
+#include "NotoSansMonoSCB20.h"
+
+// The font names are arrays references, thus must NOT be in quotes ""
+#define AA_FONT_SMALL NotoSansBold15
+#define AA_FONT_LARGE NotoSansBold36
+#define AA_FONT_MONO  NotoSansMonoSCB20
+
+#define leftButton 19
+#define rightButton 21
+
+#include "xbm.h"             // Sketch tab header for xbm images
+
+// Include icon header files
+#include "Heart.h"
+#include "Kiss.h"
+#include "Love.h"
+#include "Info.h"
+#include "Radar.h"
+
+#include <SPI.h>
+#include <TFT_eSPI.h>        // Hardware-specific library
+TFT_eSPI tft = TFT_eSPI();   // Invoke library
+
+
+//Define global status flags
+int RGB_LED_STATE = 0;
+int CLOCKFACE_STATE = 0;
+int LOOKING_FOR_LOVE = 0;
+int LOVE_FOUND = 0; 
+int AGE = 22;
+int DISTANCE = 5;
+const char* GENDER = "F";
+
+//Global flag to let time server it's SAFE to get data
+int isSafe = 1;
+
+//Define global time variable
+struct tm timeinfo;
+
+
+// DEFINE TASKS FOR PREPROCCESSOR
+void TaskButtonInput( void *pvParameters );
+void TaskDrawScreen (void *pvParmeters );
+void TaskSyncWebData (void *pvParamters );
+void TaskTimeServer (void *pvParameters );
+void TaskCelebrate (void *pvParameters );
+
+
+void setup() {
+  
+  // initialize serial communication at 115200 bits per second:
+  Serial.begin(115200);
+
+  //Connect to WiFi
+  WiFi.begin(ssid, password);
+  while (WiFi.status() != WL_CONNECTED){
+    vTaskDelay(300);
+    Serial.println(".");
+    }
+    Serial.println("CONNECTED");
+
+    // Init and get the time
+    configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
+    
+
+//////////////////////////////////////////////// SET UP ICONS //////////////////////////////////////////
+  // Swap the colour byte order when rendering
+  tft.setSwapBytes(true);
+////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+
+  
+  // Now set up two tasks to run independently.
+  xTaskCreatePinnedToCore(
+    TaskButtonInput
+    ,  "ButtonInput"   // A name just for humans
+    ,  1024  // This stack size can be checked & adjusted by reading the Stack Highwater
+    ,  NULL
+    ,  1  // Priority, with 3 (configMAX_PRIORITIES - 1) being the highest, and 0 being the lowest.
+    ,  NULL 
+    ,  ARDUINO_RUNNING_CORE);
+
+
+  xTaskCreatePinnedToCore(
+    TaskDrawScreen
+    , "DrawSprite"
+    , 4096
+    , NULL 
+    , 1
+    , NULL
+    , 1);
+
+
+  xTaskCreatePinnedToCore(
+    TaskSyncWebData
+    , "SyncWebData"
+    , 82000
+    , NULL
+    , 1
+    , NULL
+    , 0);
+
+   xTaskCreatePinnedToCore(
+     TaskTimeServer
+    , "TimeServer"
+    , 4096
+    , NULL
+    , 2
+    , NULL
+    , ARDUINO_RUNNING_CORE);
+
+   xTaskCreatePinnedToCore(
+     TaskCelebrate
+    , "Celebrate"
+    , 20000
+    , NULL
+    , 1
+    , NULL
+    , 0);
+      
+
+tft.begin();
+tft.setRotation(0);
+
+delay(100);
+
+
+// Now the task scheduler, which takes over control of scheduling individual tasks, is automatically started.
+}
+
+void loop(){
+  // Empty. Things are done in Tasks.
+}
+
+//////////////TASKS/////////////////////////////////////////////////////////////////////////////////////////
+
+void TaskCelebrate(void *pvParameters){
+  (void) pvParameters;
+
+  long count = 0;
+  
+  for(;;){
+
+    if(LOVE_FOUND == 1){
+    CLOCKFACE_STATE = 3; 
+    
+    tft.fillScreen(TFT_BLACK);
+    tft.fillScreen(TFT_RED);
+    tft.loadFont(AA_FONT_LARGE);
+    tft.setTextColor(TFT_WHITE, TFT_RED);
+    tft.setCursor(0,0);
+    tft.println("");
+    tft.println("");
+    tft.println("~NOW KISS!~"); 
+    tft.println("         <3  ");
+    vTaskDelay(5000);
+    tft.fillScreen(TFT_BLACK);
+    
+    for(int i = 0; i < 20; i++){
+      tft.pushImage(random(tft.width() -  loveWidth), random(tft.height() -  loveHeight),  loveWidth,  loveHeight, Love);
+      vTaskDelay(100);
+      tft.pushImage(random(tft.width() - heartWidth), random(tft.height() - heartHeight), heartWidth, heartHeight, Heart);
+      vTaskDelay(100);
+      tft.pushImage(random(tft.width() - kissWidth), random(tft.height() - kissHeight), kissWidth, kissHeight, Kiss);
+      vTaskDelay(100);
+    }
+
+    /*
+    tft.fillScreen(TFT_RED);
+    tft.loadFont(AA_FONT_LARGE);
+    tft.setTextColor(TFT_WHITE, TFT_RED);
+    tft.println("");
+    tft.println("");
+    tft.println(" NOW KISS!"); 
+    vTaskDelay(5000);
+    */
+      
+    }
+
+    vTaskDelay(20);
+  }
+
+   //vTaskDelete(NULL);
+}
+
+//THIS TASK GETS CURRENT TIME FROM TIME SERVER///////////////////////////////////////////////////////////
+void TaskTimeServer(void *pvParameters) {
+  (void) pvParameters;
+
+  for(;;){
+    //Check if Time is available
+    if(!getLocalTime(&timeinfo)){
+    Serial.println("Failed to obtain time");
+              
+      }
+      
+      //Serial.println(&timeinfo, "%H:%M:%S");
+      vTaskDelay(100);
+    
+  }
+  
+   //vTaskDelete(NULL);
+}
+
+//THIS TASK READS BUTTON STATES AND SETS FLAGS///////////////////////////////////////////////////////////
+void TaskButtonInput(void *pvParameters){
+  (void) pvParameters;
+
+  pinMode(rightButton, INPUT);
+  pinMode(leftButton, INPUT);
+
+  int STATE_leftButton = 0;
+  int STATE_rightButton = 0;
+  
+  for (;;){ 
+    STATE_leftButton = digitalRead(leftButton);
+    STATE_rightButton = digitalRead(rightButton);
+    vTaskDelay(200);
+    //Check to see if button value still matches previous value. Only execute flag updates when it doesn't   
+
+
+   ////Clockface is on home screen (Time and Battery)///////////////////
+   if(CLOCKFACE_STATE == 0){              
+         switch (STATE_leftButton) {
+           case HIGH:
+             CLOCKFACE_STATE = 2;
+             LOOKING_FOR_LOVE = true;
+             RGB_LED_STATE = 2;
+             vTaskDelay(100);
+             break;
+           case LOW:
+             break;
+         }
+
+         switch (STATE_rightButton){
+            case HIGH:
+              CLOCKFACE_STATE = 1;
+              LOOKING_FOR_LOVE = false;
+              RGB_LED_STATE = 1;
+              vTaskDelay(100);
+              break;
+            case LOW:
+              break;
+          }}
+          
+////Clockface is on Config screen/////////////////////////////////////    
+   else if(CLOCKFACE_STATE == 1){         
+        switch (STATE_leftButton) {
+            case HIGH:
+             CLOCKFACE_STATE = 0;
+             LOOKING_FOR_LOVE = false;
+             RGB_LED_STATE = 0; 
+             vTaskDelay(100);
+             break;
+           case LOW:
+            break;
+       }
+      
+       switch (STATE_rightButton){
+            case HIGH:
+              CLOCKFACE_STATE = 2;                                      //CHANGE THIS TOO
+              //LOVE_FOUND = 1;                                          //THIS IS FOR TEST PURPOSES!
+              LOOKING_FOR_LOVE = true;
+              RGB_LED_STATE = 2;
+              vTaskDelay(100);
+              break;
+            case LOW:
+              break;
+          }}
+////Clockface is on LOVE RADAR scan/////////////////////////////////////
+    else if(CLOCKFACE_STATE == 2){     
+        switch (STATE_leftButton) {
+            case HIGH:
+             CLOCKFACE_STATE = 1;
+             LOOKING_FOR_LOVE = false;
+             RGB_LED_STATE = 1;
+             vTaskDelay(100);
+             break;
+           case LOW:
+           break;
+       }
+      
+       switch (STATE_rightButton){
+            case HIGH:
+              CLOCKFACE_STATE = 0;
+              LOOKING_FOR_LOVE = false;
+              RGB_LED_STATE = 0; 
+              vTaskDelay(100);
+              break;
+            case LOW:
+              break;
+          }
+   }
+   Serial.println(CLOCKFACE_STATE);
+  // Serial.println(LOOKING_FOR_LOVE);
+  // Serial.println(RGB_LED_STATE);
+
+    
+    }
+}
+//THIS TASK DRAWS MENUS TO THE SCREEN////////////////////////////////////////////////////////////////////
+void TaskDrawScreen (void *pvParameters){
+  (void) pvParameters;
+
+  for(;;){
+
+//////////////////////////////////////////////////// HOME - CURRENT TIME DISPLAY ////////////////////////////////////////////
+      if (CLOCKFACE_STATE == 0){
+ 
+        tft.loadFont(AA_FONT_LARGE);
+        tft.fillScreen(TFT_WHITE);
+        tft.setTextColor(TFT_BLACK, TFT_WHITE); // Change the font colour and the background colour       
+        tft.setCursor(0, 0); // Set cursor at top left of screena        
+        tft.setTextWrap(true); // Wrap on width
+        tft.setTextColor(TFT_BLACK, TFT_WHITE);
+        tft.println("");  
+        tft.setTextColor(TFT_BLACK, TFT_WHITE);
+        tft.println(&timeinfo," %H:%M:%S"); 
+        tft.println("");
+        tft.loadFont(AA_FONT_LARGE);
+        tft.println(&timeinfo," %A");
+        tft.println(&timeinfo," %B %d");
+        tft.println(&timeinfo," %Y");
+        tft.unloadFont(); // Remove the font to recover memory used
+        
+        vTaskDelay(500);
+
+////////////////////////////////////////////// CURRENT JSON CONFIG INFO ////////////////////////////////////////// 
+      }
+      else if(CLOCKFACE_STATE == 1){
+        tft.loadFont(AA_FONT_LARGE);
+        tft.fillScreen(TFT_WHITE);
+        tft.setTextColor(TFT_BLACK, TFT_WHITE);
+        tft.setCursor(10,10);
+        tft.println("Preferences");
+        tft.println("");
+        //tft.loadFont(AA_FONT_SMALL);
+        tft.print(" Dist:        ");
+        tft.println(DISTANCE);
+        tft.print(" Age:        ");
+        tft.println(AGE);
+        tft.print(" Gender:  ");
+        tft.println(GENDER);
+
+        vTaskDelay(500);
+        }
+
+///////////////////////////////////////////// LOVE RADAR SCANNING ///////////////////////////////////////////////
+      else if(CLOCKFACE_STATE == 2){
+        tft.fillScreen(TFT_BLACK);
+        tft.pushImage(0, 0, radarWidth, radarHeight, Radar);
+        vTaskDelay(500);
+        }      
+      else{
+        //do nothing lmao I want to sleep 
+        }
+  } 
+}
+
+//THIS TASK SYNCS JSON DATA BETWEEN WATCH AND SERVER///////////////////////////////////////////////////////
+void TaskSyncWebData (void *pvParameters){
+  (void) pvParameters;
+
+  for(;;){
+    
+      HTTPClient client;
+
+      client.begin(getJSON);
+      int httpCode = client.GET();
+
+      if (httpCode > 0) {
+        
+        String payload = client.getString();
+
+        char json[500];
+        payload.replace(" ", "");
+        payload.replace("\n", "");
+        payload.trim();
+        payload.remove(0,1);
+        payload.toCharArray(json, 500);
+
+        StaticJsonDocument<200> doc;
+        deserializeJson(doc, json);
+
+        //This is where all the updates happen
+        LOOKING_FOR_LOVE = doc["LOOKING_FOR_LOVE"];
+        LOVE_FOUND = doc["LOVE_FOUND"];
+        AGE = doc["AGE"];
+        DISTANCE = doc["DISTANCE"];
+        GENDER = doc["GENDER"];
+
+         vTaskDelay(30000);
+       //isSafe = 1; 
+        
+        }
+        
+      else{
+        Serial.println("Error on HTTP request");
+        }
+      
+    }
+   vTaskDelay(100);
+}
+
